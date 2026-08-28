@@ -8,222 +8,227 @@
 import SwiftUI
 import Vision
 import Combine
-import AVFoundation //Video
-import QuartzCore //Rendering
 
-/// Kelas `PoseAnalyzer` bertanggung jawab untuk mendeteksi pose tubuh manusia dari gambar menggunakan framework Apple Vision (`VNDetectHumanBodyPoseRequest`),
-/// menghitung sudut sendi (seperti siku/lengan kanan), serta memberikan umpan balik (feedback) status ke antarmuka pengguna (UI SwiftUI).
-
-/// Menggunakan protokol `ObservableObject` sehingga perubahan pada properti `@Published` akan secara otomatis memicu pembaruan tampilan di UI.
+/// Kelas `PoseAnalyzer` bertindak sebagai pengolah data utama (View Model).
+/// Tugasnya:
+/// 1. Menerima gambar Coach & User.
+/// 2. Mendeteksi titik-titik sendi tubuh menggunakan framework Apple Vision (`VNDetectHumanBodyPoseRequest`).
+/// 3. Menghitung sudut tiap sendi (Lengan, Bahu, Paha, Lutut, Betis, Torso, Kepala).
+/// 4. Membandingkan sudut pose Coach vs User dan menandai bagian tubuh mana yang salah.
 class PoseAnalyzer: ObservableObject {
     
-    // MARK: - Published Properties (State UI)
+    // MARK: - Published Properties (Status State untuk UI)
     
-    /// Menyimpan koordinat ter-normalisasi (0.0 - 1.0) dari titik-titik sendi tubuh yang berhasil dideteksi.
-    /// Kunci: `JointName` (misal: `.rightShoulder`, `.rightElbow`, `.rightWrist`).
-    /// Nilai: `CGPoint` posisi sendi pada sistem koordinat Vision.
-    @Published var detectedJoints: [VNHumanBodyPoseObservation.JointName: CGPoint] = [:]
+    /// Menyimpan koordinat sendi-sendi tubuh foto Coach (0.0 - 1.0)
+    @Published var coachJoints: [VNHumanBodyPoseObservation.JointName: CGPoint] = [:]
     
-    /// Teks pesan status yang akan ditampilkan di UI (misal: "✅ BENAR!", "❌ SALAH!", atau "Menganalisis Pose...").
-    @Published var teksStatusPose: String = "Menunggu Video..."
+    /// Menyimpan koordinat sendi-sendi tubuh foto User (0.0 - 1.0)
+    @Published var userJoints: [VNHumanBodyPoseObservation.JointName: CGPoint] = [:]
     
-    /// Warna indikator status untuk UI (misal: `.green` jika sesuai target, `.red` jika di luar toleransi, `.orange` jika tidak terlihat).
+    /// Himpunan (Set) berisi nama bagian tubuh User yang posenya salah (misal: "Betis Kiri", "Paha Kiri", "Lengan Kiri").
+    /// Properti ini digunakan oleh `ContentView` untuk mewarnai garis kerangka tulang menjadi MERAH.
+    @Published var bagianSalah: Set<String> = []
+    
+    /// Teks pesan status yang ditampilkan pada banner atas UI (misal: "✅ BENAR!" atau "❌ SALAH! Perbaiki: ...")
+    @Published var teksStatusPose: String = "Menganalisis dua pose..."
+    
+    /// Warna background banner status (Hijau jika benar, Merah jika salah, Oranye jika tidak terdeteksi)
     @Published var warnaStatus: Color = .gray
     
-    @Published var player = AVPlayer()
-    private var videoOutput: AVPlayerItemVideoOutput?
-    private var displayLink: CADisplayLink?
+    // MARK: - 1. Fungsi Utama Membandingkan 2 Foto
     
-    // MARK: - Setup Video (CYCLE 2)
-    func mulaiMemutarVideo(namaFile: String) {
-        guard let url = Bundle.main.url(forResource: namaFile, withExtension: "mp4") else {
-            print("Video tidak ditemukan")
-            return
-        }
-        
-        let playerItem = AVPlayerItem(url: url)
-        
-        // 1. Setup Sang Penjepret (AVPlayerItemVideoOutput)
-        // Kita atur format gambarnya menjadi BGRA agar mudah dibaca Vision
-        let attributes = [kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA)]
-        let output = AVPlayerItemVideoOutput(pixelBufferAttributes: attributes)
-        playerItem.add(output)
-        self.videoOutput = output
-        
-        self.player.replaceCurrentItem(with: playerItem)
-        
-        // 2. Setup Sang Metronom (CADisplayLink)
-        self.displayLink = CADisplayLink(target: self, selector: #selector(tangkapFrame))
-        self.displayLink?.add(to: .main, forMode: .common)
-        
-        self.player.play()
-    }
-    
-    // MARK: - Replay Video
-    func replayVideo() {
-        player.seek(to: .zero)
-        player.play()
-    }
-    
-    // Fungsi ini akan dipanggil 60 kali per detik oleh Metronom
-    @objc private func tangkapFrame(link: CADisplayLink) {
-        guard let output = videoOutput, let item = player.currentItem else { return }
-        
-        // Cek waktu video saat ini
-        let itemTime = output.itemTime(forHostTime: CACurrentMediaTime())
-        
-        // Jika ada frame gambar baru di waktu tersebut
-        if output.hasNewPixelBuffer(forItemTime: itemTime) {
-            // Ambil gambar mentahnya (disebut CVPixelBuffer)
-            if let pixelBuffer = output.copyPixelBuffer(forItemTime: itemTime, itemTimeForDisplay: nil) {
-                
-                // INI ADALAH JEMBATANNYA!
-                // Kita kirim gambar mentah dari video ke fungsi Vision yang sudah kamu buat
-                prosesFrameDenganVision(pixelBuffer: pixelBuffer)
-            }
-        }
-    }
-    
-    // MARK: - Rumus Sudut Matematika
-    
-    /// Menghitung sudut dalam derajat (°) antara tiga titik lokasi sendi (`pointA`, `pointB`, `pointC`),
-    /// dengan `pointB` sebagai vertex/titik pusat sudut (misal: Siku sebagai pusat antara Bahu dan Pergelangan Tangan).
-    ///
+    /// Menganalisis foto Coach dan foto User, menghitung selisih sudut sendi, lalu menentukan bagian tubuh yang salah.
     /// - Parameters:
-    ///   - pointA: Titik ujung pertama (misal: Bahu).
-    ///   - pointB: Titik vertex / sudut pusat (misal: Siku).
-    ///   - pointC: Titik ujung kedua (misal: Pergelangan Tangan).
-    /// - Returns: Besar sudut dalam satuan derajat (0.0° hingga 180.0°).
-    func hitungSudut(pointA: CGPoint, pointB: CGPoint, pointC: CGPoint) -> Double {
-        // Hitung sudut atan2 dari dua vektor relatif terhadap titik pusat (pointB)
-        let radians = atan2(pointC.y - pointB.y, pointC.x - pointB.x) -
-        atan2(pointA.y - pointB.y, pointA.x - pointB.x)
+    ///   - coachImage: Gambar pose target (Coach)
+    ///   - userImage: Gambar pose tiruan (User)
+    func bandingkanDuaFoto(coachImage: UIImage, userImage: UIImage) {
+        // Ekstraksi data sendi & sudut dari masing-masing foto
+        let dataCoach = prosesSatuFoto(image: coachImage)
+        let dataUser = prosesSatuFoto(image: userImage)
         
-        // Konversi dari Radian ke Derajat
-        var degrees = radians * 180.0 / .pi
-        
-        // Normalisasi agar nilai derajat selalu positif (0 - 360)
-        if degrees < 0 { degrees += 360.0 }
-        
-        // Mengubah sudut menjadi rentang sudut dalam (0 - 180 derajat)
-        if degrees > 180.0 { degrees = 360.0 - degrees }
-        
-        return degrees
-    }
-    
-    // MARK: - Logika Apple Vision & Validasi Pose
-    
-    /// Memproses `UIImage` untuk mendeteksi pose tubuh manusia, mengukur sudut lengan kanan,
-    /// dan membandingkan hasil pengukuran dengan target pose yang ditentukan.
-    ///
-    /// - Parameter image: Gambar `UIImage` yang akan dianalisis.
-    // MARK: - Logika Apple Vision (CYCLE 2 & FULL BODY)
-    func prosesFrameDenganVision(pixelBuffer: CVPixelBuffer) {
-        let request = VNDetectHumanBodyPoseRequest()
-        
-        // Orientasi .up karena videomu tegak lurus (berdasarkan temuan sebelumnya)
-        let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up, options: [:])
-        
-        do {
+        // Pembaruan UI dilakukan di Main Thread
+        DispatchQueue.main.async {
+            self.coachJoints = dataCoach.joints
+            self.userJoints = dataUser.joints
             
-            try handler.perform([request])
+            var bagianSalahList: [String] = []
             
-            // 1. Ambil semua orang yang terdeteksi
-            guard let semuaOrang = request.results, !semuaOrang.isEmpty else { return }
+            /// Batas toleransi selisih sudut (dalam derajat °).
+            /// Jika selisih sudut Coach & User > 30.0°, maka dianggap SALAH.
+            let toleransi: Double = 30.0
             
-            // 2. Variabel untuk menyimpan "Si Penari Utama"
-            var mainObservation: VNHumanBodyPoseObservation? = nil
-            var ukuranTerbesar: CGFloat = 0
-            
-            // 3. Looping untuk mengukur siapa yang paling besar di layar
-            for orang in semuaOrang {
-                let titik = try? orang.recognizedPoints(.all)
-                // Ambil koordinat titik yang valid saja
-                let lokasi = titik?.values.compactMap { $0.confidence > 0.3 ? $0.location : nil } ?? []
-                
-                if !lokasi.isEmpty {
-                    // Cari batas kiri-kanan dan atas-bawah dari titik-titik orang ini
-                    let minX = lokasi.map { $0.x }.min() ?? 0
-                    let maxX = lokasi.map { $0.x }.max() ?? 0
-                    let minY = lokasi.map { $0.y }.min() ?? 0
-                    let maxY = lokasi.map { $0.y }.max() ?? 0
+            // Loop untuk memeriksa setiap sudut sendi yang berhasil dihitung
+            for (namaBagian, sudutCoach) in dataCoach.sudut {
+                if let sudutUser = dataUser.sudut[namaBagian] {
+                    // Hitung selisih mutlak (absolut) antara sudut Coach dan sudut User
+                    let selisih = abs(sudutCoach - sudutUser)
                     
-                    // Hitung luas area kerangkanya (Lebar x Tinggi)
-                    let area = (maxX - minX) * (maxY - minY)
-                    
-                    // Jika area orang ini lebih besar dari yang sebelumnya, jadikan dia Penari Utama
-                    if area > ukuranTerbesar {
-                        ukuranTerbesar = area
-                        mainObservation = orang
+                    // Jika selisih melebihi batas toleransi, tandai bagian tubuh tersebut
+                    if selisih > toleransi {
+                        // Petakan nama sudut internal ke kategori label UI yang lebih spesifik
+                        let kategori: String
+                        switch namaBagian {
+                        case "Bahu Kanan", "Siku Kanan", "Lengan Kanan":
+                            kategori = "Lengan Kanan"
+                        case "Bahu Kiri", "Siku Kiri", "Lengan Kiri":
+                            kategori = "Lengan Kiri"
+                        case "Paha Kanan":
+                            kategori = "Paha Kanan"
+                        case "Lutut Kanan", "Betis Kanan":
+                            kategori = "Betis Kanan"
+                        case "Paha Kiri":
+                            kategori = "Paha Kiri"
+                        case "Lutut Kiri", "Betis Kiri":
+                            kategori = "Betis Kiri"
+                        default:
+                            kategori = namaBagian
+                        }
+                        
+                        // Cegah duplikasi nama kategori dalam daftar kesalahan
+                        if !bagianSalahList.contains(kategori) {
+                            bagianSalahList.append(kategori)
+                        }
                     }
                 }
             }
             
-            // 4. Lanjutkan kode yang lama, HANYA menggunakan Si Penari Utama
-            guard let observation = mainObservation else { return }
+            // Simpan daftar bagian salah ke properti @Published agar UI otomatis diperbarui
+            self.bagianSalah = Set(bagianSalahList)
+            
+            // Tentukan status akhir dan warna banner di UI
+            if dataCoach.sudut.isEmpty || dataUser.sudut.isEmpty {
+                self.teksStatusPose = "⚠️ Pose tubuh tidak terdeteksi jelas."
+                self.warnaStatus = .orange
+            } else if bagianSalahList.isEmpty {
+                self.teksStatusPose = "✅ BENAR! Semua pose akurat."
+                self.warnaStatus = .green
+            } else {
+                // Tampilkan daftar bagian tubuh yang perlu diperbaiki oleh User
+                self.teksStatusPose = "❌ SALAH! Perbaiki: \(bagianSalahList.joined(separator: ", "))"
+                self.warnaStatus = .red
+            }
+        }
+    }
+    
+    // MARK: - 2. Ekstraksi Vision untuk 1 Foto
+    
+    /// Menggunakan Apple Vision Framework untuk mendeteksi lokasi sendi tubuh dan menghitung berbagai sudut sendi.
+    /// - Parameter image: Foto `UIImage` yang akan diekstraksi
+    /// - Returns: Tuple berisi (map sendi tubuh, dictionary nilai sudut dalam derajat °)
+    private func prosesSatuFoto(image: UIImage) -> (joints: [VNHumanBodyPoseObservation.JointName: CGPoint], sudut: [String: Double]) {
+        guard let cgImage = image.cgImage else { return ([:], [:]) }
+        
+        // 1. Inisialisasi request deteksi pose tubuh milik Apple Vision
+        let request = VNDetectHumanBodyPoseRequest()
+        
+        // 2. Sesuaikan orientasi gambar agar Vision membaca titik kiri-kanan & atas-bawah dengan tepat
+        let orientation = CGImagePropertyOrientation(image.imageOrientation)
+        let handler = VNImageRequestHandler(cgImage: cgImage, orientation: orientation, options: [:])
+        
+        do {
+            // Jalankan deteksi Vision
+            try handler.perform([request])
+            guard let observation = request.results?.first else { return ([:], [:]) }
+            
+            // Ambil semua titik sendi yang terdeteksi
             let recognizedPoints = try observation.recognizedPoints(.all)
-
-            var tempJoints: [VNHumanBodyPoseObservation.JointName: CGPoint] = [:]
+            var extractedJoints: [VNHumanBodyPoseObservation.JointName: CGPoint] = [:]
             
-            // LOOPING: Simpan semua titik tubuh (Kepala sampai kaki)
-            for (jointName, point) in recognizedPoints {
-                // Hanya ambil titik yang AI yakin di atas 30%
-                if point.confidence > 0.3 {
-                    tempJoints[jointName] = point.location
-                }
+            // Hanya simpan titik sendi yang tingkat kepercayaannya (confidence) di atas 30%
+            for (jointName, point) in recognizedPoints where point.confidence > 0.3 {
+                extractedJoints[jointName] = point.location
             }
             
-            // 2. Hitung Sudut Siku Kanan (Untuk Validasi MVP)
-            var teksBaru = "Lengan Kanan Tidak Terlihat"
-            var warnaBaru = Color.gray
+            var kumpulanSudut: [String: Double] = [:]
             
-            // Cek apakah bahu, siku, dan pergelangan kanan berhasil ditemukan di frame ini
-            if let bahu = tempJoints[.rightShoulder],
-               let siku = tempJoints[.rightElbow],
-               let pergelangan = tempJoints[.rightWrist] {
-                
-                // Panggil fungsi hitung trigonometri
-                let sudut = hitungSudut(pointA: bahu, pointB: siku, pointC: pergelangan)
-                
-                // Logika Benar/Salah (Target: 90 derajat, Toleransi: 30 derajat)
-                if abs(sudut - 90.0) <= 30.0 {
-                    teksBaru = "✅ BENAR! Sudut: \(Int(sudut))°"
-                    warnaBaru = .green
-                } else {
-                    teksBaru = "❌ SALAH! Sudut: \(Int(sudut))°"
-                    warnaBaru = .red
-                }
+            // MARK: - A. Lengan Kanan (Siku & Bahu)
+            if let b = extractedJoints[.rightShoulder], let s = extractedJoints[.rightElbow], let p = extractedJoints[.rightWrist] {
+                // Sudut Siku Kanan: Tekukan antara Bahu -> Siku -> Pergelangan Tangan
+                kumpulanSudut["Siku Kanan"] = hitungSudut(pointA: b, pointB: s, pointC: p)
+            }
+            if let n = extractedJoints[.neck], let b = extractedJoints[.rightShoulder], let s = extractedJoints[.rightElbow] {
+                // Sudut Bahu Kanan: Angkatan lengan relatif terhadap Leher -> Bahu -> Siku
+                kumpulanSudut["Bahu Kanan"] = hitungSudut(pointA: n, pointB: b, pointC: s)
             }
             
-            // 3. Lempar Semua Hasil ke UI di Main Thread
-            DispatchQueue.main.async {
-                self.detectedJoints = tempJoints // Kirim data full body untuk digambar
-                self.teksStatusPose = teksBaru   // Update teks Benar/Salah
-                self.warnaStatus = warnaBaru     // Update warna background teks
+            // MARK: - B. Lengan Kiri (Siku & Bahu)
+            if let b = extractedJoints[.leftShoulder], let s = extractedJoints[.leftElbow], let p = extractedJoints[.leftWrist] {
+                // Sudut Siku Kiri: Tekukan antara Bahu -> Siku -> Pergelangan Tangan
+                kumpulanSudut["Siku Kiri"] = hitungSudut(pointA: b, pointB: s, pointC: p)
             }
+            if let n = extractedJoints[.neck], let b = extractedJoints[.leftShoulder], let s = extractedJoints[.leftElbow] {
+                // Sudut Bahu Kiri: Angkatan lengan relatif terhadap Leher -> Bahu -> Siku
+                kumpulanSudut["Bahu Kiri"] = hitungSudut(pointA: n, pointB: b, pointC: s)
+            }
+            
+            // MARK: - C. Kaki Kanan (Lutut, Paha, & Betis)
+            if let p = extractedJoints[.rightHip], let l = extractedJoints[.rightKnee], let a = extractedJoints[.rightAnkle] {
+                // Sudut Lutut Kanan: Tekukan lutut antara Pinggul -> Lutut -> Mata Kaki
+                kumpulanSudut["Lutut Kanan"] = hitungSudut(pointA: p, pointB: l, pointC: a)
+            }
+            if let n = extractedJoints[.neck], let p = extractedJoints[.rightHip], let l = extractedJoints[.rightKnee] {
+                // Sudut Paha Kanan: Angkatan paha relatif terhadap Leher -> Pinggul -> Lutut (mendeteksi kaki diangkat)
+                kumpulanSudut["Paha Kanan"] = hitungSudut(pointA: n, pointB: p, pointC: l)
+            }
+            if let n = extractedJoints[.neck], let l = extractedJoints[.rightKnee], let a = extractedJoints[.rightAnkle] {
+                // Sudut Betis Kanan: Kemiringan betis relatif terhadap Leher -> Lutut -> Mata Kaki
+                kumpulanSudut["Betis Kanan"] = hitungSudut(pointA: n, pointB: l, pointC: a)
+            }
+            
+            // MARK: - D. Kaki Kiri (Lutut, Paha, & Betis)
+            if let p = extractedJoints[.leftHip], let l = extractedJoints[.leftKnee], let a = extractedJoints[.leftAnkle] {
+                // Sudut Lutut Kiri: Tekukan lutut antara Pinggul -> Lutut -> Mata Kaki
+                kumpulanSudut["Lutut Kiri"] = hitungSudut(pointA: p, pointB: l, pointC: a)
+            }
+            if let n = extractedJoints[.neck], let p = extractedJoints[.leftHip], let l = extractedJoints[.leftKnee] {
+                // Sudut Paha Kiri: Angkatan paha relatif terhadap Leher -> Pinggul -> Lutut (mendeteksi kaki diangkat)
+                kumpulanSudut["Paha Kiri"] = hitungSudut(pointA: n, pointB: p, pointC: l)
+            }
+            if let n = extractedJoints[.neck], let l = extractedJoints[.leftKnee], let a = extractedJoints[.leftAnkle] {
+                // Sudut Betis Kiri: Kemiringan betis relatif terhadap Leher -> Lutut -> Mata Kaki
+                kumpulanSudut["Betis Kiri"] = hitungSudut(pointA: n, pointB: l, pointC: a)
+            }
+            
+            // MARK: - E. Torso & Kepala
+            if let l = extractedJoints[.neck], let r = extractedJoints[.root], let p = extractedJoints[.rightHip] {
+                // Sudut Torso: Kelurusan badan Leher -> Panggul Tengah -> Pinggul
+                kumpulanSudut["Torso"] = hitungSudut(pointA: l, pointB: r, pointC: p)
+            }
+            if let h = extractedJoints[.nose], let l = extractedJoints[.neck], let r = extractedJoints[.root] {
+                // Sudut Kepala: Kemiringan wajah Hidung -> Leher -> Panggul Tengah
+                kumpulanSudut["Kepala"] = hitungSudut(pointA: h, pointB: l, pointC: r)
+            }
+            
+            return (extractedJoints, kumpulanSudut)
             
         } catch {
-            print("Gagal memproses Vision: \(error.localizedDescription)")
+            print("Vision Error: \(error)")
+            return ([:], [:])
         }
     }
-}
-
-// MARK: - Helper Konversi Orientasi
-/// Ekstensi untuk mengonversi `UIImage.Orientation` milik UIKit
-/// menjadi `CGImagePropertyOrientation` yang dibutuhkan oleh Vision Framework.
-extension CGImagePropertyOrientation {
-    init(_ uiOrientation: UIImage.Orientation) {
-        switch uiOrientation {
-        case .up: self = .up
-        case .upMirrored: self = .upMirrored
-        case .down: self = .down
-        case .downMirrored: self = .downMirrored
-        case .left: self = .left
-        case .leftMirrored: self = .leftMirrored
-        case .right: self = .right
-        case .rightMirrored: self = .rightMirrored
-        @unknown default: self = .up
-        }
+    
+    // MARK: - 3. Rumus Trigonometri Sudut (Atan2)
+    
+    /// Menhitung besar sudut (dalam derajat °) yang dibentuk oleh 3 titik koordinat 2D (A - B - C), dengan titik B sebagai vertex (titik sudut pusat).
+    /// - Parameters:
+    ///   - pointA: Titik awal (misal: Bahu/Pinggul)
+    ///   - pointB: Titik pusat sudut/vertex (misal: Siku/Lutut)
+    ///   - pointC: Titik akhir (misal: Pergelangan Tangan/Mata Kaki)
+    /// - Returns: Besar sudut dalam rentang 0.0° - 180.0°
+    private func hitungSudut(pointA: CGPoint, pointB: CGPoint, pointC: CGPoint) -> Double {
+        // Hitung selisih sudut vektor BC dan vektor BA menggunakan fungsi atan2
+        let radians = atan2(pointC.y - pointB.y, pointC.x - pointB.x) -
+                      atan2(pointA.y - pointB.y, pointA.x - pointB.x)
+        
+        // Konversi nilai radian ke derajat
+        var degrees = radians * 180.0 / .pi
+        
+        // Normalisasi derajat ke rentang positif 0° - 360°
+        if degrees < 0 { degrees += 360.0 }
+        
+        // Ubah menjadi sudut dalam (interior angle) rentang 0° - 180°
+        if degrees > 180.0 { degrees = 360.0 - degrees }
+        
+        return degrees
     }
 }
-
