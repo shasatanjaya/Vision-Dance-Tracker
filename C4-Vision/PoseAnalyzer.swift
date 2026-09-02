@@ -12,6 +12,8 @@ struct Checkpoint: Identifiable, Equatable {
     let timeFormatted: String
     let bagianSalah: Set<String>
     let pesan: String
+    let coachJoints: [VNHumanBodyPoseObservation.JointName: CGPoint]
+    let userJoints: [VNHumanBodyPoseObservation.JointName: CGPoint]
     
     static func == (lhs: Checkpoint, rhs: Checkpoint) -> Bool {
         return lhs.id == rhs.id
@@ -87,14 +89,15 @@ class PoseAnalyzer: ObservableObject {
     private var coachOutput: AVPlayerItemVideoOutput?
     private var userOutput: AVPlayerItemVideoOutput?
     private var displayLink: CADisplayLink?
+    private var urlCoach: URL?
+    private var urlUser: URL?
     
     // MARK: - 1. Memulai Pemutar Video Dual (Real-Time Video Comparison)
-    func mulaiMemutarVideo(namaCoach: String, namaUser: String) {
-        guard let urlCoach = Bundle.main.url(forResource: namaCoach, withExtension: "mp4"),
-              let urlUser = Bundle.main.url(forResource: namaUser, withExtension: "mp4") else {
-            print("Video tidak ditemukan")
-            return
-        }
+    
+    /// Memulai pemutaran video menggunakan URL langsung (dari file lokal, galeri, rekaman kamera, atau bundle)
+    func mulaiMemutarVideo(urlCoach: URL, urlUser: URL) {
+        self.urlCoach = urlCoach
+        self.urlUser = urlUser
         
         let itemCoach = AVPlayerItem(url: urlCoach)
         let itemUser = AVPlayerItem(url: urlUser)
@@ -136,6 +139,28 @@ class PoseAnalyzer: ObservableObject {
         self.putarSinkron(dariWaktu: .zero)
     }
     
+    /// Overload praktis untuk memutar video berdasarkan nama resource di App Bundle
+    func mulaiMemutarVideo(namaCoach: String, namaUser: String) {
+        guard let urlCoach = Bundle.main.url(forResource: namaCoach, withExtension: "mp4"),
+              let urlUser = Bundle.main.url(forResource: namaUser, withExtension: "mp4") else {
+            print("Video tidak ditemukan di bundle")
+            return
+        }
+        mulaiMemutarVideo(urlCoach: urlCoach, urlUser: urlUser)
+    }
+    
+    /// Menghentikan pemutaran video dan membersihkan DisplayLink saat keluar layar
+    func hentikanVideo() {
+        self.displayLink?.invalidate()
+        self.displayLink = nil
+        self.coachPlayer.pause()
+        self.userPlayer.pause()
+        self.coachPlayer.replaceCurrentItem(with: nil)
+        self.userPlayer.replaceCurrentItem(with: nil)
+        self.coachOutput = nil
+        self.userOutput = nil
+    }
+    
     // MARK: - 2. Navigasi & Control Video (Next, Replay, Jump)
     
     /// Memulai pemutaran kedua video secara sinkron dari frame yang sama persis
@@ -143,11 +168,23 @@ class PoseAnalyzer: ObservableObject {
         self.coachPlayer.pause()
         self.userPlayer.pause()
         
-        self.coachPlayer.seek(to: dariWaktu, toleranceBefore: .zero, toleranceAfter: .zero)
-        self.userPlayer.seek(to: dariWaktu, toleranceBefore: .zero, toleranceAfter: .zero)
+        let group = DispatchGroup()
         
-        self.coachPlayer.play()
-        self.userPlayer.play()
+        group.enter()
+        self.coachPlayer.seek(to: dariWaktu, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
+            group.leave()
+        }
+        
+        group.enter()
+        self.userPlayer.seek(to: dariWaktu, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
+            group.leave()
+        }
+        
+        group.notify(queue: .main) { [weak self] in
+            guard let self = self, !self.isPausedOnError else { return }
+            self.coachPlayer.play()
+            self.userPlayer.play()
+        }
     }
     
     /// Menekan tombol "Next / Lanjutkan Tarian" setelah jeda kesalahan
@@ -155,7 +192,7 @@ class PoseAnalyzer: ObservableObject {
         let currentTime = CMTimeGetSeconds(coachPlayer.currentTime())
         let validTime = currentTime.isNaN ? 0.0 : currentTime
         self.lastResumedTime = validTime
-        self.isIgnoringErrorsUntilTime = validTime + gracePeriodDuration // Abaikan error selama 0.8 detik agar pengguna dapat mengejar tempo video
+        self.isIgnoringErrorsUntilTime = validTime + gracePeriodDuration // Abaikan error selama masa tenggang
         self.errorFramesCount.removeAll() // Reset akumulasi frame kesalahan
         self.isPausedOnError = false
         self.activeCheckpoint = nil
@@ -169,19 +206,36 @@ class PoseAnalyzer: ObservableObject {
     
     /// Melompat ke checkpoint tertentu saat pengguna menekan marker timeline
     func lompatKeCheckpoint(_ checkpoint: Checkpoint) {
-        self.coachPlayer.seek(to: checkpoint.timestamp, toleranceBefore: .zero, toleranceAfter: .zero)
-        self.userPlayer.seek(to: checkpoint.timestamp, toleranceBefore: .zero, toleranceAfter: .zero)
-        
         self.coachPlayer.pause()
         self.userPlayer.pause()
+        
+        let targetTime = checkpoint.timestamp
+        self.coachPlayer.seek(to: targetTime, toleranceBefore: .zero, toleranceAfter: .zero)
+        self.userPlayer.seek(to: targetTime, toleranceBefore: .zero, toleranceAfter: .zero)
         
         self.errorFramesCount.removeAll()
         self.isPausedOnError = true
         self.activeCheckpoint = checkpoint
+        self.coachJoints = checkpoint.coachJoints
+        self.userJoints = checkpoint.userJoints
         self.bagianSalah = checkpoint.bagianSalah
         self.pesanSpesifik = checkpoint.pesan
         self.teksStatusPose = "🛑 REFLEKSI (\(checkpoint.timeFormatted)): Perbaiki \(Array(checkpoint.bagianSalah).joined(separator: ", "))"
         self.warnaStatus = .red
+        
+        // Ekstraksi ulang dari frame statis video secara presisi tinggi (Zero-Lag Frame Extraction)
+        if let uCoach = self.urlCoach, let uUser = self.urlUser {
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                guard let self = self else { return }
+                let exactCoach = self.ekstraksiPosePresisi(url: uCoach, at: targetTime)
+                let exactUser = self.ekstraksiPosePresisi(url: uUser, at: targetTime)
+                
+                DispatchQueue.main.async {
+                    if !exactCoach.isEmpty { self.coachJoints = exactCoach }
+                    if !exactUser.isEmpty { self.userJoints = exactUser }
+                }
+            }
+        }
     }
     
     /// Mereset dan memutar ulang kedua video dari awal
@@ -216,6 +270,13 @@ class PoseAnalyzer: ObservableObject {
         
         // Jika sedang di-pause karena error, jangan re-evaluasi frame baru
         if isPausedOnError { return }
+        
+        // Koreksi Drift: Jika selisih waktu video User dan Coach > 0.05s, sinkronkan kembali
+        let coachSeconds = CMTimeGetSeconds(timeCoach)
+        let userSeconds = CMTimeGetSeconds(timeUser)
+        if !coachSeconds.isNaN && !userSeconds.isNaN && abs(coachSeconds - userSeconds) > 0.05 {
+            self.userPlayer.seek(to: timeCoach, toleranceBefore: .zero, toleranceAfter: .zero)
+        }
         
         var hasNewCoachFrame = false
         var hasNewUserFrame = false
@@ -316,16 +377,22 @@ class PoseAnalyzer: ObservableObject {
             coachPlayer.pause()
             userPlayer.pause()
             
+            // Kunci posisi kedua player pada frame timeCoach yang persis sama
+            coachPlayer.seek(to: timeCoach, toleranceBefore: .zero, toleranceAfter: .zero)
+            userPlayer.seek(to: timeCoach, toleranceBefore: .zero, toleranceAfter: .zero)
+            
             // Reset frame error tracking saat pause agar tidak langsung pause berulang saat dilanjutkan
             self.errorFramesCount.removeAll()
             
-            // Rekam Checkpoint baru secara instan setiap kali Auto-Pause terjadi (Tanpa Cooldown)
+            // Gunakan pose mentah (current) dari frame saat jeda daripada yang terdistorsi smoothing
             let newCheckpoint = Checkpoint(
                 timestamp: timeCoach,
                 timeInSeconds: currentTimeSeconds,
                 timeFormatted: formatWaktu(seconds: currentTimeSeconds),
                 bagianSalah: Set(bagianSalahList),
-                pesan: pesanUmpanBalik
+                pesan: pesanUmpanBalik,
+                coachJoints: currentCoachJoints,
+                userJoints: currentUserJoints
             )
             var currentCheckpoints = self.checkpoints
             currentCheckpoints.append(newCheckpoint)
@@ -334,8 +401,8 @@ class PoseAnalyzer: ObservableObject {
             let finalBagianSalah = Set(bagianSalahList)
             
             DispatchQueue.main.async {
-                self.coachJoints = smoothedCoach
-                self.userJoints = smoothedUser
+                self.coachJoints = currentCoachJoints
+                self.userJoints = currentUserJoints
                 self.bagianSalah = finalBagianSalah
                 self.isPausedOnError = true
                 self.pesanSpesifik = pesanUmpanBalik
@@ -343,6 +410,20 @@ class PoseAnalyzer: ObservableObject {
                 self.activeCheckpoint = finalActive
                 self.teksStatusPose = "🛑 AUTO-PAUSE: Perbaiki \(bagianSalahList.joined(separator: ", "))"
                 self.warnaStatus = .red
+            }
+            
+            // Ekstraksi presisi frame statis di background untuk memastikan 100% piksel akurat
+            if let uCoach = self.urlCoach, let uUser = self.urlUser {
+                DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                    guard let self = self else { return }
+                    let exactCoach = self.ekstraksiPosePresisi(url: uCoach, at: timeCoach)
+                    let exactUser = self.ekstraksiPosePresisi(url: uUser, at: timeCoach)
+                    
+                    DispatchQueue.main.async {
+                        if !exactCoach.isEmpty { self.coachJoints = exactCoach }
+                        if !exactUser.isEmpty { self.userJoints = exactUser }
+                    }
+                }
             }
             return
         }
@@ -441,35 +522,11 @@ class PoseAnalyzer: ObservableObject {
             try handler.perform([request])
             guard let semuaOrang = request.results, !semuaOrang.isEmpty else { return ([:], [:]) }
             
-            // Cari Penari Utama (Kombinasi Titik Paling Lengkap, Luas Bounding Box, dan Posisi di Tengah Frame)
-            var mainObservation: VNHumanBodyPoseObservation? = nil
-            var skorTertinggi: CGFloat = 0
-            
-            for orang in semuaOrang {
-                let titik = try? orang.recognizedPoints(.all)
-                let lokasi = titik?.values.compactMap { $0.confidence > 0.2 ? $0.location : nil } ?? []
-                if lokasi.count >= 6 {
-                    let minX = lokasi.map { $0.x }.min() ?? 0
-                    let maxX = lokasi.map { $0.x }.max() ?? 0
-                    let minY = lokasi.map { $0.y }.min() ?? 0
-                    let maxY = lokasi.map { $0.y }.max() ?? 0
-                    let area = (maxX - minX) * (maxY - minY)
-                    let centerX = (minX + maxX) / 2.0
-                    let centerBonus = 1.0 - abs(centerX - 0.5)
-                    let skor = area * CGFloat(lokasi.count) * centerBonus
-                    
-                    if skor > skorTertinggi {
-                        skorTertinggi = skor
-                        mainObservation = orang
-                    }
-                }
-            }
-            
-            guard let observation = mainObservation ?? semuaOrang.first else { return ([:], [:]) }
+            guard let observation = cariPenariUtama(semuaOrang: semuaOrang) ?? semuaOrang.first else { return ([:], [:]) }
             let recognizedPoints = try observation.recognizedPoints(.all)
             var extractedJoints: [VNHumanBodyPoseObservation.JointName: CGPoint] = [:]
             
-            for (jointName, point) in recognizedPoints where point.confidence > 0.2 {
+            for (jointName, point) in recognizedPoints where point.confidence > 0.35 {
                 extractedJoints[jointName] = point.location
             }
             
@@ -479,6 +536,72 @@ class PoseAnalyzer: ObservableObject {
         } catch {
             print("Vision Error: \(error)")
             return ([:], [:])
+        }
+    }
+    
+    // MARK: - Filter Penari Utama (Tengah Frame, Terlengkap, & Confidence Tinggi)
+    private func cariPenariUtama(semuaOrang: [VNHumanBodyPoseObservation]) -> VNHumanBodyPoseObservation? {
+        var bestObservation: VNHumanBodyPoseObservation? = nil
+        var bestScore: CGFloat = -1
+        
+        for orang in semuaOrang {
+            guard let titik = try? orang.recognizedPoints(.all) else { continue }
+            let validPoints = titik.values.filter { $0.confidence > 0.35 }
+            guard validPoints.count >= 6 else { continue }
+            
+            let locations = validPoints.map { $0.location }
+            let minX = locations.map { $0.x }.min() ?? 0
+            let maxX = locations.map { $0.x }.max() ?? 0
+            let minY = locations.map { $0.y }.min() ?? 0
+            let maxY = locations.map { $0.y }.max() ?? 0
+            
+            let width = maxX - minX
+            let height = maxY - minY
+            let area = width * height
+            
+            // Prioritas penari yang berdiri paling dekat di tengah layar (x = 0.5)
+            let centerX = (minX + maxX) / 2.0
+            let centerDistance = abs(centerX - 0.5)
+            let centerBonus = max(0.2, 1.0 - (centerDistance * 2.0))
+            
+            // Skor menggabungkan area, jumlah titik sendi terdeteksi, dan posisi tengah
+            let score = area * CGFloat(validPoints.count) * centerBonus
+            
+            if score > bestScore {
+                bestScore = score
+                bestObservation = orang
+            }
+        }
+        
+        return bestObservation
+    }
+    
+    // MARK: - Ekstraksi Pose Presisi dari Frame Video Statis (Zero-Lag Asset Extraction)
+    func ekstraksiPosePresisi(url: URL, at time: CMTime) -> [VNHumanBodyPoseObservation.JointName: CGPoint] {
+        let asset = AVURLAsset(url: url)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.requestedTimeToleranceBefore = .zero
+        generator.requestedTimeToleranceAfter = .zero
+        
+        do {
+            let cgImage = try generator.copyCGImage(at: time, actualTime: nil)
+            let request = VNDetectHumanBodyPoseRequest()
+            let handler = VNImageRequestHandler(cgImage: cgImage, orientation: .up, options: [:])
+            try handler.perform([request])
+            
+            guard let semuaOrang = request.results, !semuaOrang.isEmpty else { return [:] }
+            guard let observation = cariPenariUtama(semuaOrang: semuaOrang) ?? semuaOrang.first else { return [:] }
+            
+            let recognizedPoints = try observation.recognizedPoints(.all)
+            var extractedJoints: [VNHumanBodyPoseObservation.JointName: CGPoint] = [:]
+            
+            for (jointName, point) in recognizedPoints where point.confidence > 0.35 {
+                extractedJoints[jointName] = point.location
+            }
+            return extractedJoints
+        } catch {
+            return [:]
         }
     }
     

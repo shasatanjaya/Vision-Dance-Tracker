@@ -19,10 +19,12 @@ struct KotakVideo: View {
     let label: String
     
     var body: some View {
-        VStack {
+        VStack(spacing: 6) {
             Text(label)
-                .font(.subheadline)
-                .bold()
+                .font(.footnote)
+                .fontWeight(.semibold)
+                .foregroundColor(.secondary)
+                .lineLimit(1)
             
             ZStack {
                 // 1. Pemutar Video
@@ -35,9 +37,15 @@ struct KotakVideo: View {
                 }
             }
             .aspectRatio(9/16, contentMode: .fit) // Kunci rasio video vertikal (Portrait)
-            .cornerRadius(10)
-            .shadow(radius: 4)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(Color(uiColor: .separator).opacity(0.4), lineWidth: 1)
+            )
+            .shadow(color: Color.black.opacity(0.12), radius: 6, y: 3)
+            .frame(maxHeight: .infinity)
         }
+        .frame(maxHeight: .infinity)
     }
     
     /// Struktur data pembantu untuk mendefinisikan ruas garis tulang

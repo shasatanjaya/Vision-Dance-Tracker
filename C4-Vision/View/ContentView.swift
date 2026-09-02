@@ -13,151 +13,163 @@ struct ContentView: View {
     /// Inisialisasi pengolah data pose (PoseAnalyzer)
     @StateObject private var analyzer = PoseAnalyzer()
     
+    // Parameter URL Video Dinamis dari Layar Upload
+    var coachURL: URL? = nil
+    var userURL: URL? = nil
+    var labelCoach: String = "Coach (Acuan: dance_coach2.mp4)"
+    var labelUser: String = "User (Tarian: dance_user2.mp4)"
+    
     var body: some View {
-        VStack(spacing: 12) {
-            // Banner Teks Status Hasil Analisis Pose Real-Time
-            Text(analyzer.teksStatusPose)
-                .font(.headline)
-                .foregroundColor(.white)
-                .padding()
-                .frame(maxWidth: .infinity)
-                .background(analyzer.warnaStatus)
-                .cornerRadius(10)
-                .padding(.horizontal)
+        ZStack {
+            Color(uiColor: .systemGroupedBackground)
+                .ignoresSafeArea()
             
-            // Pop-Up Umpan Balik Refleksi Spesifik Saat Video Terhenti (Auto-Pause)
-            if analyzer.isPausedOnError {
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack {
+            VStack(spacing: 8) {
+                
+                // MARK: - 1. Banner Refleksi Kesalahan Saat Video Auto-Pause
+                if analyzer.isPausedOnError {
+                    HStack(spacing: 12) {
                         Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundColor(.yellow)
-                        Text("Momen Refleksi Kesalahan")
-                            .font(.headline)
-                            .bold()
+                            .symbolRenderingMode(.multicolor)
+                            .font(.title3)
+                        
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Momen Refleksi Kesalahan")
+                                .font(.subheadline.weight(.bold))
+                                .foregroundColor(.white)
+                            Text(analyzer.pesanSpesifik)
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.95))
+                                .lineLimit(2)
+                        }
+                        
                         Spacer()
                     }
-                    Text(analyzer.pesanSpesifik)
-                        .font(.subheadline)
-                        .foregroundColor(.white)
+                    .padding(.vertical, 10)
+                    .padding(.horizontal, 14)
+                    .background(Color.red.opacity(0.92))
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .shadow(color: Color.red.opacity(0.25), radius: 6, y: 3)
+                    .padding(.horizontal, 12)
+                    .transition(.move(edge: .top).combined(with: .opacity))
                 }
-                .padding()
-                .background(Color.red.opacity(0.9))
-                .cornerRadius(12)
-                .shadow(radius: 6)
-                .padding(.horizontal)
-                .transition(.scale.combined(with: .opacity))
-            }
-            
-            // Area Perbandingan Dua Video Bergerak Berdampingan
-            HStack(spacing: 16) {
-                // VIDEO KIRI (COACH: dance_coach2.mp4)
-                KotakVideo(
-                    player: analyzer.coachPlayer,
-                    joints: analyzer.coachJoints,
-                    bagianSalah: [],
-                    label: "Coach (Acuan: dance_coach2.mp4)"
-                )
                 
-                // VIDEO KANAN (USER: dance_user.mp4)
-                KotakVideo(
-                    player: analyzer.userPlayer,
-                    joints: analyzer.userJoints,
-                    bagianSalah: analyzer.bagianSalah,
-                    label: "User (Tarian: dance_user2.mp4)"
-                )
-            }
-            .padding(.horizontal)
-            
-            // Bar Checkpoints Kesalahan (Timeline Bullets)
-            if !analyzer.checkpoints.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("📌 Titik Checkpoint Kesalahan:")
-                        .font(.caption)
-                        .bold()
-                        .foregroundColor(.secondary)
-                        .padding(.horizontal)
+                // MARK: - 2. Area Perbandingan Dua Video (Edge-to-Edge Lebar Maksimal)
+                HStack(spacing: 12) {
+                    // VIDEO KIRI (COACH)
+                    KotakVideo(
+                        player: analyzer.coachPlayer,
+                        joints: analyzer.coachJoints,
+                        bagianSalah: [],
+                        label: labelCoach
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            ForEach(analyzer.checkpoints) { cp in
-                                Button(action: {
-                                    analyzer.lompatKeCheckpoint(cp)
-                                }) {
-                                    HStack(spacing: 4) {
-                                        Image(systemName: "flag.fill")
-                                            .foregroundColor(.red)
-                                        Text(cp.timeFormatted)
-                                            .bold()
-                                        Text("(\(Array(cp.bagianSalah).joined(separator: ", ")))")
+                    // VIDEO KANAN (USER)
+                    KotakVideo(
+                        player: analyzer.userPlayer,
+                        joints: analyzer.userJoints,
+                        bagianSalah: analyzer.bagianSalah,
+                        label: labelUser
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                .padding(.horizontal, 12)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                
+                // MARK: - 3. Bar Timeline Checkpoint Kesalahan
+                if !analyzer.checkpoints.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(analyzer.checkpoints) { cp in
+                                    Button(action: {
+                                        analyzer.lompatKeCheckpoint(cp)
+                                    }) {
+                                        HStack(spacing: 4) {
+                                            Image(systemName: "flag.fill")
+                                                .foregroundColor(analyzer.activeCheckpoint == cp ? .white : .red)
+                                                .font(.caption2)
+                                            Text(cp.timeFormatted)
+                                                .fontWeight(.semibold)
+                                            Text("(\(Array(cp.bagianSalah).joined(separator: ", ")))")
+                                        }
+                                        .font(.caption2)
+                                        .padding(.vertical, 5)
+                                        .padding(.horizontal, 10)
                                     }
-                                    .font(.caption)
-                                    .padding(.vertical, 8)
-                                    .padding(.horizontal, 12)
-                                    .background(analyzer.activeCheckpoint == cp ? Color.red : Color.gray.opacity(0.2))
-                                    .foregroundColor(analyzer.activeCheckpoint == cp ? .white : .primary)
-                                    .cornerRadius(16)
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 16)
-                                            .stroke(analyzer.activeCheckpoint == cp ? Color.red : Color.clear, lineWidth: 2)
-                                    )
+                                    .buttonStyle(.bordered)
+                                    .tint(analyzer.activeCheckpoint == cp ? .red : .secondary)
+                                    .clipShape(Capsule())
                                 }
                             }
+                            .padding(.horizontal, 12)
                         }
-                        .padding(.horizontal)
                     }
                 }
-            }
-            
-            // Tombol Navigasi "Next / Lanjutkan Tarian" saat terhenti pada kesalahan
-            if analyzer.isPausedOnError {
-                Button(action: {
-                    analyzer.lanjutkanVideo()
-                }) {
-                    HStack {
-                        Text("Lanjutkan Tarian (Next)")
-                            .font(.headline)
-                            .bold()
-                        Image(systemName: "chevron.right.circle.fill")
-                            .font(.title3)
+                
+                // MARK: - 4. Baris Tombol Kontrol (Selalu Terlihat / Always Visible di Bawah)
+                HStack(spacing: 12) {
+                    // Tombol Putar Ulang (Replay)
+                    Button(action: {
+                        analyzer.replayVideo()
+                    }) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "arrow.clockwise")
+                            Text("Putar Ulang")
+                                .font(.subheadline.weight(.semibold))
+                        }
+                        .padding(.vertical, 8)
+                        .padding(.horizontal, 16)
                     }
-                    .foregroundColor(.white)
-                    .padding()
-                    .frame(maxWidth: .infinity)
-                    .background(Color.green)
-                    .cornerRadius(12)
-                    .shadow(radius: 4)
+                    .buttonStyle(.bordered)
+                    .tint(.blue)
+                    .controlSize(.regular)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    
+                    // Tombol Lanjutkan Tarian (Next) - Selalu terlihat jelas saat video terhenti
+                    if analyzer.isPausedOnError {
+                        Button(action: {
+                            analyzer.lanjutkanVideo()
+                        }) {
+                            HStack(spacing: 8) {
+                                Text("Lanjutkan Tarian (Next)")
+                                    .font(.headline)
+                                Image(systemName: "arrow.right.circle.fill")
+                                    .font(.title3)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                        .tint(.green)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .transition(.scale.combined(with: .opacity))
+                    }
                 }
-                .padding(.horizontal)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
             }
-            
-            // Tombol Putar Ulang Kedua Video (Replay All)
-            Button(action: {
-                analyzer.replayVideo()
-            }) {
-                HStack {
-                    Image(systemName: "arrow.clockwise")
-                    Text("Putar Ulang Kedua Video")
-                }
-                .font(.subheadline)
-                .bold()
-                .foregroundColor(.white)
-                .padding(.vertical, 12)
-                .frame(maxWidth: .infinity)
-                .background(Color.blue)
-                .cornerRadius(10)
-            }
-            .padding(.horizontal)
-            
-            Spacer()
         }
-        .animation(.easeInOut, value: analyzer.isPausedOnError)
+        .animation(.easeInOut(duration: 0.25), value: analyzer.isPausedOnError)
+        .navigationTitle("Perbandingan Pose")
+        .navigationBarTitleDisplayMode(.inline)
         .onAppear {
-            // Mulai memutar dan mengontrol perbandingan real-time 2 video
-            analyzer.mulaiMemutarVideo(namaCoach: "dance_coach2", namaUser: "dance_user2")
+            if let cURL = coachURL, let uURL = userURL {
+                analyzer.mulaiMemutarVideo(urlCoach: cURL, urlUser: uURL)
+            } else {
+                analyzer.mulaiMemutarVideo(namaCoach: "dance_coach2", namaUser: "dance_user2")
+            }
+        }
+        .onDisappear {
+            analyzer.hentikanVideo()
         }
     }
 }
 
 #Preview {
-    ContentView()
+    NavigationStack {
+        ContentView()
+    }
 }
