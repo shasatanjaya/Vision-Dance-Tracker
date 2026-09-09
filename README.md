@@ -1,20 +1,20 @@
 # 🕺 Vision Dance Tracker (MVP)
 
-Dance Movement Detector adalah aplikasi iOS interaktif yang dirancang untuk membantu pengguna mempelajari dan menyempurnakan gerakan tari dengan evaluasi postur tubuh berbasis AI. Aplikasi ini bertindak sebagai "pelatih virtual" layaknya sistem *Video Review* (VAR).
+Dance Movement Detector is an interactive iOS app designed to help users learn and perfect their dance movements through AI-based body posture evaluation. This app acts as a "virtual coach".
 
 ## ✨ Core Features
-- **Real-time Body Tracking:** Memanfaatkan Apple Vision Framework untuk melacak 19 titik sendi (Full Body Skeleton) dari frame video yang sedang berjalan.
-- **Smart Pose Validation:** Melakukan kalkulasi derajat sudut antar sendi secara otomatis menggunakan trigonometri untuk memvalidasi akurasi gerakan.
-- **Coach vs. User Comparison:** Tampilan *Split Screen* (50/50) yang memutar video referensi (Coach) secara berdampingan dengan video pengguna.
-- **Instant Visual Feedback:** Indikator UI yang reaktif (misal: Hijau = Benar, Merah = Salah) dievaluasi secara instan berdasarkan *margin of error* (toleransi derajat sudut) postur yang dideteksi.
+- **Real-time Body Tracking:** Utilizes the Apple Vision Framework to track 19 joint points (Full Body Skeleton) from active video frames.
+- **Smart Pose Validation:** Automatically calculates the degree of angles between joints using trigonometry to validate movement accuracy.
+- **Coach vs. User Comparison:** A *Split Screen* (50/50) layout that plays a reference video (Coach) side-by-side with the user's video.
+- **Instant Visual Feedback:** Reactive UI indicators (e.g., Green = Correct, Red = Incorrect) evaluated instantly based on the detected posture's *margin of error* (angle degree tolerance).
 
 ## 🛠 Tech Stack & Architecture
-- **SwiftUI:** Arsitektur UI (memanfaatkan pola MVVM untuk memisahkan *View* dan *Analyzer Logic*).
-- **Apple Vision:** Menggunakan `VNDetectHumanBodyPoseRequest` untuk *Machine Learning pose estimation*.
-- **AVFoundation:** Menarik frame video secara *real-time* via `AVPlayerItemVideoOutput`.
-- **QuartzCore:** Sinkronisasi ekstraksi *frame* video secara presisi mengikuti *refresh rate* layar (60 FPS) menggunakan `CADisplayLink`.
+- **SwiftUI:** UI architecture (utilizing the MVVM pattern to separate the *View* and *Analyzer Logic*).
+- **Apple Vision:** Uses `VNDetectHumanBodyPoseRequest` for *Machine Learning pose estimation*.
+- **AVFoundation:** Extracts real-time video frames via `AVPlayerItemVideoOutput`.
+- **QuartzCore:** Precisely synchronizes video frame extraction to match the screen's refresh rate (60 FPS) using `CADisplayLink`.
 
-## 🚀 Progres (10-Day Act Phase - C04)
-- [x] **Cycle 1: Core Logic & Static Image Validation** (Berhasil melakukan ekstraksi koordinat sendi & logika matematika abs untuk toleransi sudut).
-- [x] **Cycle 2: Real-time Video Processing** (Berhasil menarik *frame* dari AVPlayer ke Vision secara mulus tanpa *lag* serta memfilter deteksi multi-objek untuk mencari Penari Utama).
-- [x] **Cycle 3: Split-Screen Comparison** (Menyatukan komponen menjadi *layout* komparasi ganda untuk MVP).
+## 🚀 Progress (10-Day Act Phase - C04)
+- [x] **Cycle 1: Core Logic & Static Image Validation** (Successfully extracted joint coordinates & established the absolute math logic for angle tolerance).
+- [x] **Cycle 2: Real-time Video Processing** (Successfully extracted frames from AVPlayer to Vision smoothly without lag, and filtered multi-object detection to lock onto the Main Dancer).
+- [x] **Cycle 3: Split-Screen Comparison** (Integrated the components into a dual comparison layout for the MVP).
