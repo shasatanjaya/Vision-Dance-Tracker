@@ -8,18 +8,27 @@
 import SwiftUI
 import Vision
 
-// MARK: - Komponen UI Kotak Foto & Skeleton Overlay
-
-/// Komponen `KotakFoto` menampilkan gambar pose beserta overlay garis kerangka tulang (skeleton) di atasnya.
+// MARK: - Komponen UI Kotak Foto & Skeleton Overlay (KotakFoto)
+/// Komponen `KotakFoto` menampilkan gambar pose statis beserta overlay garis kerangka tulang (skeleton) di atasnya.
+/// Digunakan untuk perbandingan pose statis atau evaluasi foto checkpoint.
 struct KotakFoto: View {
+    /// Gambar foto pose
     let image: UIImage
+    
+    /// Koordinat sendi-sendi tubuh hasil analisis Apple Vision
     let joints: [VNHumanBodyPoseObservation.JointName: CGPoint]
+    
+    /// Himpunan bagian tubuh yang posenya salah
     let bagianSalah: Set<String>
+    
+    /// Label judul foto
     let label: String
     
     var body: some View {
         VStack {
-            Text(label).font(.subheadline).bold()
+            Text(label)
+                .font(.subheadline)
+                .bold()
             
             Image(uiImage: image)
                 .resizable()
@@ -34,17 +43,10 @@ struct KotakFoto: View {
         }
     }
     
-    /// Struktur data pembantu untuk mendefinisikan ruas garis tulang
-    struct BoneSegment {
-        let group: String // Nama kelompok bagian tubuh (misal: "Betis Kiri", "Paha Kanan")
-        let start: VNHumanBodyPoseObservation.JointName // Titik awal sendi
-        let end: VNHumanBodyPoseObservation.JointName // Titik akhir sendi
-    }
-    
     // MARK: - Fungsi Menggambar Garis Tulang & Titik Sendi
     @ViewBuilder
     func drawSkeleton(in size: CGSize, joints: [VNHumanBodyPoseObservation.JointName: CGPoint]) -> some View {
-        // Pemetaan ruas garis tulang berdasarkan kelompok bagian tubuh
+        // Pemetaan ruas garis tulang berdasarkan kelompok bagian tubuh menggunakan struct BoneSegment bersama
         let segments: [BoneSegment] = [
             // Lengan Kanan
             BoneSegment(group: "Lengan Kanan", start: .rightShoulder, end: .rightElbow),
@@ -85,7 +87,7 @@ struct KotakFoto: View {
                     
                     Path { path in
                         // Catatan: Koordinat Y milik Vision dimulai dari bawah (0.0 di bawah, 1.0 di atas).
-                        // Oleh karena itu kita membalik koordinat Y dengan rumus: (1.0 - y) * height
+                        // Oleh karena itu kita membalik koordinat Y dengan rumus: (1.0 - s.y) * size.height
                         path.move(to: CGPoint(x: s.x * size.width, y: (1.0 - s.y) * size.height))
                         path.addLine(to: CGPoint(x: e.x * size.width, y: (1.0 - e.y) * size.height))
                     }

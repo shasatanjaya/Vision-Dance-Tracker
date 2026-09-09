@@ -4,22 +4,7 @@ import Combine
 import AVFoundation
 import QuartzCore
 
-/// Model data untuk menampung momen kesalahan (Checkpoint) pada video
-struct Checkpoint: Identifiable, Equatable {
-    let id = UUID()
-    let timestamp: CMTime
-    let timeInSeconds: Double
-    let timeFormatted: String
-    let bagianSalah: Set<String>
-    let pesan: String
-    let coachJoints: [VNHumanBodyPoseObservation.JointName: CGPoint]
-    let userJoints: [VNHumanBodyPoseObservation.JointName: CGPoint]
-    
-    static func == (lhs: Checkpoint, rhs: Checkpoint) -> Bool {
-        return lhs.id == rhs.id
-    }
-}
-
+// MARK: - View Model Analisis Pose Tarian (PoseAnalyzer)
 /// Kelas `PoseAnalyzer` bertindak sebagai pengolah data utama (View Model).
 /// Memandu analisis pose statis (2 foto) maupun analisis video bergerak real-time (2 video).
 class PoseAnalyzer: ObservableObject {
@@ -38,30 +23,30 @@ class PoseAnalyzer: ObservableObject {
     /// Batas toleransi selisih sudut per bagian tubuh (dalam derajat °).
     /// Dikalibrasi presisi dan ketat untuk tarian langsung mengacu pada Coach.
     @Published var toleransi: [String: Double] = [
-        "Lengan Kanan": 18.0,
-        "Lengan Kiri": 18.0,
-        "Bahu Kanan": 18.0,
-        "Siku Kanan": 18.0,
-        "Lengan Bawah Kanan": 18.0,
-        "Bahu Kiri": 18.0,
-        "Siku Kiri": 18.0,
-        "Lengan Bawah Kiri": 18.0,
-        "Paha Kanan": 22.0,
-        "Paha Kiri": 22.0,
-        "Lutut Kanan": 25.0,
-        "Lutut Kiri": 25.0,
-        "Betis Kanan": 25.0,
-        "Betis Kiri": 25.0,
-        "Kaki Kanan": 25.0,
-        "Kaki Kiri": 25.0,
+        "Right Arm": 18.0,
+        "Left Arm": 18.0,
+        "Right Shoulder": 18.0,
+        "Right Elbow": 18.0,
+        "Right Forearm": 18.0,
+        "Left Shoulder": 18.0,
+        "Left Elbow": 18.0,
+        "Left Forearm": 18.0,
+        "Right Leg": 22.0,
+        "Left Leg": 22.0,
+        "Right Thigh": 22.0,
+        "Left Thigh": 22.0,
+        "Right Knee": 25.0,
+        "Left Knee": 25.0,
+        "Right Calf": 25.0,
+        "Left Calf": 25.0,
         "Torso": 20.0,
-        "Kepala": 22.0
+        "Head": 22.0
     ]
     
-    /// Teks pesan status yang ditampilkan pada banner atas UI
-    @Published var teksStatusPose: String = "Menganalisis dua pose..."
+    /// Status message shown in top banner
+    @Published var teksStatusPose: String = "Analyzing dual poses..."
     
-    /// Warna background banner status
+    /// Background color of status banner
     @Published var warnaStatus: Color = .gray
     
     // MARK: - Auto-Pause & Checkpoint State
@@ -92,12 +77,24 @@ class PoseAnalyzer: ObservableObject {
     private var urlCoach: URL?
     private var urlUser: URL?
     
+    // Orientasi Track Video untuk Vision Handlers
+    private var coachVideoOrientation: CGImagePropertyOrientation = .up
+    private var userVideoOrientation: CGImagePropertyOrientation = .up
+    
     // MARK: - 1. Memulai Pemutar Video Dual (Real-Time Video Comparison)
     
     /// Memulai pemutaran video menggunakan URL langsung (dari file lokal, galeri, rekaman kamera, atau bundle)
     func mulaiMemutarVideo(urlCoach: URL, urlUser: URL) {
         self.urlCoach = urlCoach
         self.urlUser = urlUser
+        
+        // Baca orientasi rotasi track video (preferredTransform) agar skeleton tidak miring pada rekaman iPad/iPhone
+        self.muatOrientasiVideo(url: urlCoach) { [weak self] orient in
+            self?.coachVideoOrientation = orient
+        }
+        self.muatOrientasiVideo(url: urlUser) { [weak self] orient in
+            self?.userVideoOrientation = orient
+        }
         
         let itemCoach = AVPlayerItem(url: urlCoach)
         let itemUser = AVPlayerItem(url: urlUser)
@@ -197,7 +194,7 @@ class PoseAnalyzer: ObservableObject {
         self.isPausedOnError = false
         self.activeCheckpoint = nil
         self.bagianSalah = []
-        self.teksStatusPose = "▶️ Memutar tarian..."
+        self.teksStatusPose = "▶️ Playing dance comparison..."
         self.warnaStatus = .green
         
         let currentCMTime = coachPlayer.currentTime()
@@ -220,7 +217,7 @@ class PoseAnalyzer: ObservableObject {
         self.userJoints = checkpoint.userJoints
         self.bagianSalah = checkpoint.bagianSalah
         self.pesanSpesifik = checkpoint.pesan
-        self.teksStatusPose = "🛑 REFLEKSI (\(checkpoint.timeFormatted)): Perbaiki \(Array(checkpoint.bagianSalah).joined(separator: ", "))"
+        self.teksStatusPose = "🛑 REFLECTION (\(checkpoint.timeFormatted)): Adjust \(Array(checkpoint.bagianSalah).joined(separator: ", "))"
         self.warnaStatus = .red
         
         // Ekstraksi ulang dari frame statis video secara presisi tinggi (Zero-Lag Frame Extraction)
@@ -248,7 +245,7 @@ class PoseAnalyzer: ObservableObject {
         self.bagianSalah = []
         self.checkpoints = []
         self.lastCheckpointTime = -5.0
-        self.teksStatusPose = "Menganalisis dua pose..."
+        self.teksStatusPose = "Analyzing dual poses..."
         self.warnaStatus = .gray
         
         self.putarSinkron(dariWaktu: .zero)
@@ -283,7 +280,7 @@ class PoseAnalyzer: ObservableObject {
         
         if cOutput.hasNewPixelBuffer(forItemTime: timeCoach),
            let cBuffer = cOutput.copyPixelBuffer(forItemTime: timeCoach, itemTimeForDisplay: nil) {
-            let result = prosesSatuPixelBuffer(pixelBuffer: cBuffer)
+            let result = prosesSatuPixelBuffer(pixelBuffer: cBuffer, orientation: self.coachVideoOrientation)
             if !result.joints.isEmpty {
                 self.lastCoachJoints = result.joints
                 self.lastCoachSudut = result.sudut
@@ -293,7 +290,7 @@ class PoseAnalyzer: ObservableObject {
         
         if uOutput.hasNewPixelBuffer(forItemTime: timeUser),
            let uBuffer = uOutput.copyPixelBuffer(forItemTime: timeUser, itemTimeForDisplay: nil) {
-            let result = prosesSatuPixelBuffer(pixelBuffer: uBuffer)
+            let result = prosesSatuPixelBuffer(pixelBuffer: uBuffer, orientation: self.userVideoOrientation)
             if !result.joints.isEmpty {
                 self.lastUserJoints = result.joints
                 hasNewUserFrame = true
@@ -316,7 +313,7 @@ class PoseAnalyzer: ObservableObject {
                 self.coachJoints = smoothedCoach
                 self.userJoints = smoothedUser
                 self.bagianSalah = []
-                self.teksStatusPose = "▶️ Memutar tarian..."
+                self.teksStatusPose = "▶️ Playing dance comparison..."
                 self.warnaStatus = .green
             }
             return
@@ -408,7 +405,7 @@ class PoseAnalyzer: ObservableObject {
                 self.pesanSpesifik = pesanUmpanBalik
                 self.checkpoints = finalCheckpoints
                 self.activeCheckpoint = finalActive
-                self.teksStatusPose = "🛑 AUTO-PAUSE: Perbaiki \(bagianSalahList.joined(separator: ", "))"
+                self.teksStatusPose = "🛑 AUTO-PAUSE: Adjust \(bagianSalahList.joined(separator: ", "))"
                 self.warnaStatus = .red
             }
             
@@ -453,20 +450,20 @@ class PoseAnalyzer: ObservableObject {
         
         for bagian in bagianSalah {
             switch bagian {
-            case "Lengan Kanan":
-                saranList.append("Tangan kananmu kurang diangkat atau siku belum pas!")
-            case "Lengan Kiri":
-                saranList.append("Tangan kirimu kurang diangkat atau siku belum pas!")
-            case "Paha Kanan", "Paha Kiri":
-                saranList.append("Ketinggian angkatan paha belum sesuai!")
-            case "Betis Kanan", "Betis Kiri":
-                saranList.append("Kemiringan betis/posisi pijakan kaki belum pas!")
+            case "Right Arm":
+                saranList.append("Raise your right arm higher or adjust your elbow angle!")
+            case "Left Arm":
+                saranList.append("Raise your left arm higher or adjust your elbow angle!")
+            case "Right Leg":
+                saranList.append("Adjust your right leg lift height or knee angle!")
+            case "Left Leg":
+                saranList.append("Adjust your left leg lift height or knee angle!")
             case "Torso":
-                saranList.append("Posisi badan/torso kurang tegap!")
-            case "Kepala":
-                saranList.append("Kemiringan kepala/wajah kurang sesuai!")
+                saranList.append("Keep your torso and posture upright!")
+            case "Head":
+                saranList.append("Adjust your head/neck tilt!")
             default:
-                saranList.append("Perbaiki posisi \(bagian)!")
+                saranList.append("Adjust your \(bagian) position!")
             }
         }
         
@@ -496,27 +493,27 @@ class PoseAnalyzer: ObservableObject {
     // MARK: - Helper Pemetaan Kategori UI
     private func mapToKategori(_ namaBagian: String) -> String {
         switch namaBagian {
-        case "Bahu Kanan", "Siku Kanan", "Lengan Bawah Kanan", "Lengan Kanan":
-            return "Lengan Kanan"
-        case "Bahu Kiri", "Siku Kiri", "Lengan Bawah Kiri", "Lengan Kiri":
-            return "Lengan Kiri"
-        case "Paha Kanan":
-            return "Paha Kanan"
-        case "Lutut Kanan", "Betis Kanan":
-            return "Betis Kanan"
-        case "Paha Kiri":
-            return "Paha Kiri"
-        case "Lutut Kiri", "Betis Kiri":
-            return "Betis Kiri"
+        case "Right Shoulder", "Right Elbow", "Right Forearm", "Right Arm", "Bahu Kanan", "Siku Kanan", "Lengan Bawah Kanan", "Lengan Kanan":
+            return "Right Arm"
+        case "Left Shoulder", "Left Elbow", "Left Forearm", "Left Arm", "Bahu Kiri", "Siku Kiri", "Lengan Bawah Kiri", "Lengan Kiri":
+            return "Left Arm"
+        case "Right Thigh", "Right Knee", "Right Calf", "Right Leg", "Paha Kanan", "Lutut Kanan", "Betis Kanan", "Kaki Kanan":
+            return "Right Leg"
+        case "Left Thigh", "Left Knee", "Left Calf", "Left Leg", "Paha Kiri", "Lutut Kiri", "Betis Kiri", "Kaki Kiri":
+            return "Left Leg"
+        case "Torso":
+            return "Torso"
+        case "Head", "Kepala":
+            return "Head"
         default:
             return namaBagian
         }
     }
     
     // MARK: - 4. Ekstraksi Vision untuk 1 Frame CVPixelBuffer (Video)
-    private func prosesSatuPixelBuffer(pixelBuffer: CVPixelBuffer) -> (joints: [VNHumanBodyPoseObservation.JointName: CGPoint], sudut: [String: Double]) {
+    private func prosesSatuPixelBuffer(pixelBuffer: CVPixelBuffer, orientation: CGImagePropertyOrientation = .up) -> (joints: [VNHumanBodyPoseObservation.JointName: CGPoint], sudut: [String: Double]) {
         let request = VNDetectHumanBodyPoseRequest()
-        let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up, options: [:])
+        let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: orientation, options: [:])
         
         do {
             try handler.perform([request])
@@ -602,6 +599,46 @@ class PoseAnalyzer: ObservableObject {
             return extractedJoints
         } catch {
             return [:]
+        }
+    }
+    
+    // MARK: - Helper Deteksi Orientasi Track Video (PreferredTransform)
+    private func muatOrientasiVideo(url: URL, completion: @escaping (CGImagePropertyOrientation) -> Void) {
+        let asset = AVURLAsset(url: url)
+        Task {
+            do {
+                let tracks = try await asset.loadTracks(withMediaType: .video)
+                if let track = tracks.first {
+                    let transform = try await track.load(.preferredTransform)
+                    let orient = self.cgImageOrientation(from: transform)
+                    await MainActor.run {
+                        completion(orient)
+                    }
+                    return
+                }
+            } catch {
+                print("Gagal membaca orientasi video: \(error.localizedDescription)")
+            }
+            await MainActor.run {
+                completion(.up)
+            }
+        }
+    }
+    
+    private func cgImageOrientation(from transform: CGAffineTransform) -> CGImagePropertyOrientation {
+        let isMirrored = (transform.a * transform.d - transform.b * transform.c) < 0
+        let angle = atan2(transform.b, transform.a)
+        var degrees = angle * 180.0 / .pi
+        if degrees < 0 { degrees += 360.0 }
+        
+        if abs(degrees - 90) < 45 {
+            return isMirrored ? .leftMirrored : .right
+        } else if abs(degrees - 180) < 45 {
+            return isMirrored ? .upMirrored : .down
+        } else if abs(degrees - 270) < 45 {
+            return isMirrored ? .rightMirrored : .left
+        } else {
+            return isMirrored ? .downMirrored : .up
         }
     }
     

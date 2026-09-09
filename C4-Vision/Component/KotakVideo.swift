@@ -9,17 +9,30 @@ import SwiftUI
 import Vision
 import AVKit
 
-// MARK: - Komponen UI Kotak Video & Real-Time Skeleton Overlay
-
-/// Komponen `KotakVideo` menampilkan pemutar video bergerak beserta overlay kerangka tulang (skeleton) real-time di atasnya.
+// MARK: - Komponen Pemutar Video dengan Overlay Skeleton Real-Time (KotakVideo)
+/// Komponen `KotakVideo` menampilkan pemutar video bergerak berdampingan dengan lapisan kerangka tulang (skeleton) real-time di atasnya.
+///
+/// Fitur Utama:
+/// 1. **Pemutar Video Vertikal (9:16)**: Menjaga rasio aspek tetap konsisten untuk video tarian portrait.
+/// 2. **Real-Time Skeleton Overlay**: Menggambar garis tulang tubuh manusia berdasarkan deteksi Apple Vision Framework.
+/// 3. **Indikator Warna Error**: Ruas tulang akan otomatis diwarnai **MERAH** jika terdeteksi salah, dan **HIJAU** jika postur benar.
+/// 4. **Titik Sendi Putih**: Menampilkan lingkaran putih bersih di setiap titik sendi untuk memudahkan pemantauan sudut gerak.
 struct KotakVideo: View {
+    /// Instance `AVPlayer` yang memutar video
     let player: AVPlayer
+    
+    /// Dictionary koordinat sendi-sendi tubuh hasil ekstraksi Vision (nilai normalisasi 0.0 - 1.0)
     let joints: [VNHumanBodyPoseObservation.JointName: CGPoint]
+    
+    /// Himpunan (Set) bagian tubuh yang posenya salah (contoh: "Right Arm", "Left Leg", dll.)
     let bagianSalah: Set<String>
+    
+    /// Label teks judul di atas video (contoh: "Coach (Reference)" atau "User (Dance)")
     let label: String
     
     var body: some View {
         VStack(spacing: 6) {
+            // Label Teks Judul
             Text(label)
                 .font(.footnote)
                 .fontWeight(.semibold)
@@ -29,7 +42,7 @@ struct KotakVideo: View {
             ZStack {
                 // 1. Pemutar Video
                 VideoPlayer(player: player)
-                    .disabled(true) // Sengaja dimatikan interaksinya agar video tidak di-scrubbing manual
+                    .disabled(true) // Sengaja dinonaktifkan kontrol interaksinya agar video tidak di-scrubbing manual
                 
                 // 2. Overlay Kerangka Tulang Real-Time
                 GeometryReader { geometry in
@@ -48,42 +61,36 @@ struct KotakVideo: View {
         .frame(maxHeight: .infinity)
     }
     
-    /// Struktur data pembantu untuk mendefinisikan ruas garis tulang
-    struct BoneSegment {
-        let group: String
-        let start: VNHumanBodyPoseObservation.JointName
-        let end: VNHumanBodyPoseObservation.JointName
-    }
-    
     // MARK: - Fungsi Menggambar Garis Tulang & Titik Sendi Real-Time
     @ViewBuilder
     func drawSkeleton(in size: CGSize, joints: [VNHumanBodyPoseObservation.JointName: CGPoint]) -> some View {
+        // Daftar pemetaan ruas tulang tubuh menggunakan struct BoneSegment bersama
         let segments: [BoneSegment] = [
-            // Lengan Kanan
-            BoneSegment(group: "Lengan Kanan", start: .rightShoulder, end: .rightElbow),
-            BoneSegment(group: "Lengan Kanan", start: .rightElbow, end: .rightWrist),
+            // Lengan Kanan (Right Arm)
+            BoneSegment(group: "Right Arm", start: .rightShoulder, end: .rightElbow),
+            BoneSegment(group: "Right Arm", start: .rightElbow, end: .rightWrist),
             
-            // Lengan Kiri
-            BoneSegment(group: "Lengan Kiri", start: .leftShoulder, end: .leftElbow),
-            BoneSegment(group: "Lengan Kiri", start: .leftElbow, end: .leftWrist),
+            // Lengan Kiri (Left Arm)
+            BoneSegment(group: "Left Arm", start: .leftShoulder, end: .leftElbow),
+            BoneSegment(group: "Left Arm", start: .leftElbow, end: .leftWrist),
             
-            // Badan (Torso)
+            // Badan / Batang Tubuh (Torso)
             BoneSegment(group: "Torso", start: .neck, end: .rightShoulder),
             BoneSegment(group: "Torso", start: .neck, end: .leftShoulder),
             BoneSegment(group: "Torso", start: .neck, end: .root),
             
-            // Kaki Kanan (Paha & Betis)
-            BoneSegment(group: "Paha Kanan", start: .root, end: .rightHip),
-            BoneSegment(group: "Paha Kanan", start: .rightHip, end: .rightKnee),
-            BoneSegment(group: "Betis Kanan", start: .rightKnee, end: .rightAnkle),
+            // Kaki Kanan (Right Leg)
+            BoneSegment(group: "Right Leg", start: .root, end: .rightHip),
+            BoneSegment(group: "Right Leg", start: .rightHip, end: .rightKnee),
+            BoneSegment(group: "Right Leg", start: .rightKnee, end: .rightAnkle),
             
-            // Kaki Kiri (Paha & Betis)
-            BoneSegment(group: "Paha Kiri", start: .root, end: .leftHip),
-            BoneSegment(group: "Paha Kiri", start: .leftHip, end: .leftKnee),
-            BoneSegment(group: "Betis Kiri", start: .leftKnee, end: .leftAnkle),
+            // Kaki Kiri (Left Leg)
+            BoneSegment(group: "Left Leg", start: .root, end: .leftHip),
+            BoneSegment(group: "Left Leg", start: .leftHip, end: .leftKnee),
+            BoneSegment(group: "Left Leg", start: .leftKnee, end: .leftAnkle),
             
-            // Kepala
-            BoneSegment(group: "Kepala", start: .nose, end: .neck)
+            // Kepala (Head)
+            BoneSegment(group: "Head", start: .nose, end: .neck)
         ]
         
         ZStack {
@@ -92,10 +99,16 @@ struct KotakVideo: View {
                 let seg = segments[index]
                 if let s = joints[seg.start], let e = joints[seg.end] {
                     let isSalah = bagianSalah.contains(seg.group) ||
-                                  (bagianSalah.contains("Kaki Kanan") && seg.group.contains("Kanan")) ||
-                                  (bagianSalah.contains("Kaki Kiri") && seg.group.contains("Kiri"))
+                                  (bagianSalah.contains("Lengan Kanan") && seg.group == "Right Arm") ||
+                                  (bagianSalah.contains("Lengan Kiri") && seg.group == "Left Arm") ||
+                                  (bagianSalah.contains("Paha Kanan") && seg.group == "Right Leg") ||
+                                  (bagianSalah.contains("Betis Kanan") && seg.group == "Right Leg") ||
+                                  (bagianSalah.contains("Paha Kiri") && seg.group == "Left Leg") ||
+                                  (bagianSalah.contains("Betis Kiri") && seg.group == "Left Leg") ||
+                                  (bagianSalah.contains("Kepala") && seg.group == "Head")
                     
                     Path { path in
+                        // Membalik koordinat Y karena sistem koordinat Vision dimulai dari kiri-bawah (0,0)
                         path.move(to: CGPoint(x: s.x * size.width, y: (1.0 - s.y) * size.height))
                         path.addLine(to: CGPoint(x: e.x * size.width, y: (1.0 - e.y) * size.height))
                     }

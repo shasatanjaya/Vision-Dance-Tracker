@@ -9,32 +9,18 @@ import SwiftUI
 import PhotosUI
 import AVFoundation
 
-// MARK: - Sumber Video
-enum VideoSourceType: String {
-    case preset = "Contoh Bawaan"
-    case photoLibrary = "Galeri Foto"
-    case cameraRecord = "Rekaman Kamera"
-    case file = "File Dokumen"
-}
-
-// MARK: - Model Data Video Terpilih
-struct SelectedVideoItem: Identifiable, Equatable {
-    let id: UUID = UUID()
-    let url: URL
-    let title: String
-    var durationFormatted: String = "00:00"
-    var thumbnail: UIImage? = nil
-    let sourceType: VideoSourceType
-    
-    static func == (lhs: SelectedVideoItem, rhs: SelectedVideoItem) -> Bool {
-        lhs.id == rhs.id && lhs.url == rhs.url
-    }
-}
-
-// MARK: - Helper Utilitas Video
+// MARK: - Helper Utilitas Pemrosesan Video (VideoHelper)
+/// Kumpulan fungsi utilitas statis untuk memproses berkas video:
+/// 1. Mengambil gambar thumbnail (poster frame) secara async.
+/// 2. Menghitung durasi video dalam format menit:detik.
+/// 3. Menyalin video dari PhotosPicker (Galeri) atau File App ke folder sementara (`temporaryDirectory`).
 class VideoHelper {
     
-    /// Mengambil thumbnail frame pertama dari file video URL
+    // MARK: - 1. Pembuatan Thumbnail Video
+    
+    /// Mengambil gambar thumbnail dari frame awal video pada detik ke-0.5
+    /// - Parameter url: URL file video lokal
+    /// - Returns: `UIImage` pratinjau thumbnail, atau `nil` jika gagal diekstrak
     static func generateThumbnail(for url: URL) async -> UIImage? {
         let asset = AVURLAsset(url: url)
         let generator = AVAssetImageGenerator(asset: asset)
@@ -46,7 +32,7 @@ class VideoHelper {
             let cgImage = try generator.copyCGImage(at: time, actualTime: nil)
             return UIImage(cgImage: cgImage)
         } catch {
-            // Coba ambil at .zero jika detik 0.5 gagal
+            // Fallback: jika frame detik 0.5 gagal, coba ambil at .zero
             do {
                 let cgImage = try generator.copyCGImage(at: .zero, actualTime: nil)
                 return UIImage(cgImage: cgImage)
@@ -57,7 +43,11 @@ class VideoHelper {
         }
     }
     
-    /// Menghitung durasi video dalam format mm:ss
+    // MARK: - 2. Perhitungan Durasi Video
+    
+    /// Menghitung total durasi video dan mengonversinya ke format string "mm:ss"
+    /// - Parameter url: URL file video
+    /// - Returns: String durasi terformat (contoh: "01:25")
     static func getDurationString(for url: URL) async -> String {
         let asset = AVURLAsset(url: url)
         do {
@@ -72,10 +62,13 @@ class VideoHelper {
         }
     }
     
-    /// Menyalin file video dari PhotosPickerItem ke file lokal sementara di temporaryDirectory
+    // MARK: - 3. Penyimpanan Video dari PhotosPicker ke Temp
+    
+    /// Menyalin data video dari PhotosPickerItem ke file lokal sementara di direktori temporary
+    /// - Parameter item: Objek `PhotosPickerItem` yang dipilih pengguna dari galeri
+    /// - Returns: URL file video lokal yang tersimpan di disk
     static func savePhotosPickerItemToTemp(item: PhotosPickerItem) async -> URL? {
         do {
-            // Load file sebagai Data atau file transfer
             guard let movieData = try await item.loadTransferable(type: Data.self) else {
                 return nil
             }
@@ -84,7 +77,7 @@ class VideoHelper {
             let fileName = "picker_\(UUID().uuidString).mp4"
             let destinationURL = tempDir.appendingPathComponent(fileName)
             
-            // Tulis data ke file lokal sementara
+            // Tulis data biner video ke disk
             try movieData.write(to: destinationURL)
             return destinationURL
         } catch {
@@ -93,7 +86,13 @@ class VideoHelper {
         }
     }
     
-    /// Menyalin URL dari file dokumen / rekaman kamera ke temporary directory
+    // MARK: - 4. Penyalinan File Dokumen / Kamera ke Temp
+    
+    /// Menyalin file dari URL dokumen berizin (Security Scoped) ke direktori sementara aplikasi
+    /// - Parameters:
+    ///   - sourceURL: URL asal file
+    ///   - prefix: Awalan nama file baru
+    /// - Returns: URL file lokal sementara
     static func copyToTemp(from sourceURL: URL, prefix: String = "video") -> URL? {
         let isSecured = sourceURL.startAccessingSecurityScopedResource()
         defer {
@@ -115,11 +114,18 @@ class VideoHelper {
             return destinationURL
         } catch {
             print("Gagal menyalin file video: \(error.localizedDescription)")
-            return sourceURL // Fallback gunakan sourceURL asli jika copy gagal
+            return sourceURL // Fallback gunakan sourceURL asli jika penyalinan gagal
         }
     }
     
-    /// Membuat instance `SelectedVideoItem` lengkap dengan thumbnail dan durasi secara async
+    // MARK: - 5. Factory Method Pembuatan SelectedVideoItem
+    
+    /// Membuat objek `SelectedVideoItem` lengkap dengan perhitungan durasi dan pembuatan thumbnail otomatis secara asinkron
+    /// - Parameters:
+    ///   - url: URL file video
+    ///   - title: Nama judul video
+    ///   - sourceType: Tipe sumber video
+    /// - Returns: Objek `SelectedVideoItem` yang siap ditampilkan di UI
     static func createVideoItem(url: URL, title: String, sourceType: VideoSourceType) async -> SelectedVideoItem {
         let thumb = await generateThumbnail(for: url)
         let dur = await getDurationString(for: url)

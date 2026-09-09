@@ -9,24 +9,35 @@ import SwiftUI
 import Vision
 import AVKit
 
+// MARK: - Layar Perbandingan Pose Video (ContentView)
+/// Layar pemutaran video berdampingan (Coach vs User) dengan analisis pose AI secara real-time.
+///
+/// Fitur Utama:
+/// 1. **Dual Video Player (Side-by-Side)**: Video Coach di kiri (dengan audio utama) dan video User di kanan (di-mute).
+/// 2. **Real-Time Skeleton Tracking**: Menggambar titik sendi dan garis tulang tubuh di atas video secara langsung.
+/// 3. **Auto-Pause on Error**: Video otomatis berhenti sesaat jika gerakan pengguna salah selama beberapa frame berturut-turut.
+/// 4. **Error Reflection Banner**: Menampilkan pesan evaluasi spesifik tentang bagian tubuh mana yang perlu diperbaiki.
+/// 5. **Checkpoint Timeline**: Menampilkan titik-titik bendera kesalahan di timeline yang dapat diklik untuk melompat kembali ke momen kesalahan tersebut.
+/// 6. **Control Bar**: Tombol Replay Video dan tombol Continue Dance (Next) untuk melanjutkan latihan setelah jeda kesalahan.
 struct ContentView: View {
-    /// Inisialisasi pengolah data pose (PoseAnalyzer)
+    /// Instance View Model pengolah data pose tarian
     @StateObject private var analyzer = PoseAnalyzer()
     
-    // Parameter URL Video Dinamis dari Layar Upload
+    // Parameter URL video yang diteruskan dari layar UploadView
     var coachURL: URL? = nil
     var userURL: URL? = nil
-    var labelCoach: String = "Coach (Acuan: dance_coach2.mp4)"
-    var labelUser: String = "User (Tarian: dance_user2.mp4)"
+    var labelCoach: String = "Coach (Reference: dance_coach2.mp4)"
+    var labelUser: String = "User (Dance: dance_user2.mp4)"
     
     var body: some View {
         ZStack {
+            // Latar belakang native iOS
             Color(uiColor: .systemGroupedBackground)
                 .ignoresSafeArea()
             
             VStack(spacing: 8) {
                 
-                // MARK: - 1. Banner Refleksi Kesalahan Saat Video Auto-Pause
+                // MARK: - 1. Banner Evaluasi Kesalahan (Movement Reflection Banner)
                 if analyzer.isPausedOnError {
                     HStack(spacing: 12) {
                         Image(systemName: "exclamationmark.triangle.fill")
@@ -34,7 +45,7 @@ struct ContentView: View {
                             .font(.title3)
                         
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Momen Refleksi Kesalahan")
+                            Text("Movement Reflection")
                                 .font(.subheadline.weight(.bold))
                                 .foregroundColor(.white)
                             Text(analyzer.pesanSpesifik)
@@ -54,9 +65,9 @@ struct ContentView: View {
                     .transition(.move(edge: .top).combined(with: .opacity))
                 }
                 
-                // MARK: - 2. Area Perbandingan Dua Video (Edge-to-Edge Lebar Maksimal)
+                // MARK: - 2. Dua Pemutar Video Berdampingan (Coach di Kiri, User di Kanan)
                 HStack(spacing: 12) {
-                    // VIDEO KIRI (COACH)
+                    // Video Kiri (Referensi Pelatih / Coach)
                     KotakVideo(
                         player: analyzer.coachPlayer,
                         joints: analyzer.coachJoints,
@@ -65,7 +76,7 @@ struct ContentView: View {
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     
-                    // VIDEO KANAN (USER)
+                    // Video Kanan (Latihan Pengguna / User)
                     KotakVideo(
                         player: analyzer.userPlayer,
                         joints: analyzer.userJoints,
@@ -77,7 +88,7 @@ struct ContentView: View {
                 .padding(.horizontal, 12)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 
-                // MARK: - 3. Bar Timeline Checkpoint Kesalahan
+                // MARK: - 3. Baris Timeline Checkpoint Kesalahan
                 if !analyzer.checkpoints.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
                         ScrollView(.horizontal, showsIndicators: false) {
@@ -108,15 +119,15 @@ struct ContentView: View {
                     }
                 }
                 
-                // MARK: - 4. Baris Tombol Kontrol (Selalu Terlihat / Always Visible di Bawah)
+                // MARK: - 4. Tombol Kontrol Bawah (Replay & Next)
                 HStack(spacing: 12) {
-                    // Tombol Putar Ulang (Replay)
+                    // Tombol Putar Ulang (Replay Video)
                     Button(action: {
                         analyzer.replayVideo()
                     }) {
                         HStack(spacing: 6) {
                             Image(systemName: "arrow.clockwise")
-                            Text("Putar Ulang")
+                            Text("Replay Video")
                                 .font(.subheadline.weight(.semibold))
                         }
                         .padding(.vertical, 8)
@@ -127,13 +138,13 @@ struct ContentView: View {
                     .controlSize(.regular)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     
-                    // Tombol Lanjutkan Tarian (Next) - Selalu terlihat jelas saat video terhenti
+                    // Tombol Lanjutkan Tarian (Continue Next) saat video terhenti di error
                     if analyzer.isPausedOnError {
                         Button(action: {
                             analyzer.lanjutkanVideo()
                         }) {
                             HStack(spacing: 8) {
-                                Text("Lanjutkan Tarian (Next)")
+                                Text("Continue Dance (Next)")
                                     .font(.headline)
                                 Image(systemName: "arrow.right.circle.fill")
                                     .font(.title3)
@@ -153,7 +164,7 @@ struct ContentView: View {
             }
         }
         .animation(.easeInOut(duration: 0.25), value: analyzer.isPausedOnError)
-        .navigationTitle("Perbandingan Pose")
+        .navigationTitle("Pose Comparison")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             if let cURL = coachURL, let uURL = userURL {
